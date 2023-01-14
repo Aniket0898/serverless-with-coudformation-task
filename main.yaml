@@ -1,0 +1,217 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'This is a serverless architecture template for dynamodb with lambda function with codes in s3 bucket through API gateway routes'
+
+Resources:
+## DynamoDB table----------------------------------
+  Mytable:
+    Type: AWS::DynamoDB::Table
+    Properties: 
+      AttributeDefinitions: 
+        - AttributeName: "User ID"
+          AttributeType: S
+        - AttributeName: "Email"
+          AttributeType: S
+      KeySchema: 
+        - AttributeName: "User ID"
+          KeyType: HASH
+        - AttributeName: "Email"
+          KeyType: RANGE
+      ProvisionedThroughput: 
+        ReadCapacityUnits: 2
+        WriteCapacityUnits: 2
+## IAM roles-------------------------------------------------------------
+  IAMPrivateRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: Private-Lambda-Dynamodb
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'dynamodb:BatchGetItem'
+                  - 'dynamodb:BatchWriteItem'
+                  - 'dynamodb:TagResource'
+                  - 'dynamodb:UntagResource'
+                  - 'dynamodb:PutItem'
+                  - 'dynamodb:DeleteItem'
+                  - 'dynamodb:GetItem'
+                  - 'dynamodb:Scan'
+                  - 'dynamodb:Query'
+                  - 'dynamodb:UpdateItem'
+                Resource: !GetAtt Mytable.Arn
+
+## IAM roles for public and private lambda
+
+  IAMPublicRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: Public-Lambda-Dynamodb
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'dynamodb:GetItem'
+                  - 'dynamodb:BatchGetItem'
+                  - 'dynamodb:Scan'
+                  - 'dynamodb:Query'
+                  - 'dynamodb:ConditionCheckItem'
+                Resource: !GetAtt Mytable.Arn
+
+## public lambda------------------------------------------------
+
+  PublicLambda:
+    Type: "AWS::Lambda::Function"
+    Properties: 
+        Code:
+            S3Bucket: "lambdacode-bucket"
+            S3Key: "lambda_public.zip"
+        Description: lambda function with read only accesss to dynamodb
+        FunctionName: Public
+        Handler: lambda_public.lambda_handler
+        Role: !GetAtt IAMPublicRole.Arn
+        Runtime: python3.9
+
+## Private lambda-------------------------------------------------------------
+
+  PrivateLambda:
+    Type: "AWS::Lambda::Function"
+    Properties: 
+        Code:
+            S3Bucket: "lambdacode-bucket"
+            S3Key: "lambda_private.zip"
+        Description: lambda function with full access to dynamodb
+        FunctionName: Private
+        Handler: lambda_private.lambda_handler
+        Role: !GetAtt IAMPrivateRole.Arn
+        Runtime: python3.9
+ 
+## API Gateway--------------------------------------------
+
+  ApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Description: Example API Gateway
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+      Name: LambdaApi
+
+##Api Resources---------------------------------------
+
+  APIPublicResource:
+    Type: 'AWS::ApiGateway::Resource'
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ParentId: !GetAtt
+        - ApiGateway
+        - RootResourceId
+      PathPart: 
+        Ref: PublicLambda
+    DependsOn:
+      - PublicLambda
+
+  APIPrivateResource:
+    Type: 'AWS::ApiGateway::Resource'
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ParentId: !GetAtt
+        - ApiGateway
+        - RootResourceId
+      PathPart: 
+        Ref: PrivateLambda
+    DependsOn:
+      - PrivateLambda
+
+## API Methods-------------------------------------
+
+  PublicPOSTMethod:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref APIPublicResource
+      AuthorizationType: NONE
+      Integration:
+        IntegrationHttpMethod: POST
+        Type: AWS
+        Uri: !Sub
+          - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaArn}/invocations
+          - lambdaArn: !GetAtt PublicLambda.Arn
+        IntegrationResponses: 
+          - StatusCode: 200
+      HttpMethod: POST
+      MethodResponses: 
+        - StatusCode: 200
+    DependsOn:
+      - APIPublicResource
+
+  PrivatePOSTMethod:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref APIPrivateResource
+      AuthorizationType: NONE
+      Integration:
+        IntegrationHttpMethod: POST
+        Type: AWS
+        Uri: !Sub
+          - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaArn}/invocations
+          - lambdaArn: !GetAtt PrivateLambda.Arn
+        IntegrationResponses: 
+          - StatusCode: 200
+      HttpMethod: POST
+      MethodResponses: 
+        - StatusCode: 200
+    DependsOn:
+      - APIPrivateResource
+
+##API Gateaway deployment----------------------------------------
+
+  apiGatewayDeployment:
+    Type: AWS::ApiGateway::Deployment
+    Properties:
+      RestApiId: !Ref ApiGateway
+      StageName: testDev
+    DependsOn:
+      - PublicPOSTMethod
+      - PrivatePOSTMethod
+
+## Lambda function invocation------------------------------------
+  PublicLambdaInvoke:
+      Type: AWS::Lambda::Permission
+      Properties:
+        Action: lambda:InvokeFunction
+        FunctionName: !Ref PublicLambda
+        Principal: apigateway.amazonaws.com
+
+  PrivatelambdaInvoke:
+      Type: AWS::Lambda::Permission
+      Properties:
+        Action: lambda:InvokeFunction
+        FunctionName: !Ref PrivateLambda
+        Principal: apigateway.amazonaws.com
+
+

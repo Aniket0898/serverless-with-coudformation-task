@@ -1,0 +1,12 @@
+Create an AWS CloudFormation template (YML or JSON) to manage the following resources:
+
+1. S3 Bucket for code artifact.
+2. Two Lambda functions with name "Public" and "Private". Code should be a zip in the S3 
+Bucket created above. You can choose the runtime of your choice.
+3. An API Gateway with 2 routes /public and /private. The route should forward requests to 
+different Lambda functions created above.
+4. Amazon Dynamo DB table. With "User ID" as Hash Key/Partition Key
+5. The Public Lambda has permission to only read from the table. The Private Lambda can read 
+and write records.
+
+*********************************************************************************************************
